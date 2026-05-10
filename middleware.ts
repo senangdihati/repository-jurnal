@@ -1,83 +1,34 @@
-import type { NextRequest } from "next/server";
-import { NextResponse } from "next/server";
+import { createServerClient } from "@supabase/ssr";
+import { NextResponse, type NextRequest } from "next/server";
 
-import { createSupabaseMiddlewareClient } from "@/lib/supabase/middleware";
+// Hapus impor ./env karena ini yang menyebabkan error di Edge Runtime
+// import { getSupabaseEnv } from "./env"; 
+import type { Database } from "./types";
 
-export async function middleware(request: NextRequest) {
-  const response = NextResponse.next();
-  const supabase = createSupabaseMiddlewareClient(request, response);
+export function createSupabaseMiddlewareClient(
+  request: NextRequest,
+  response: NextResponse,
+) {
+  // Ambil langsung dari process.env untuk keamanan di Edge Runtime
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY; // Sesuaikan dengan nama variabel Anda
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const pathname = request.nextUrl.pathname;
-
-  if (pathname.startsWith("/dashboard")) {
-    if (!user) {
-      const loginUrl = request.nextUrl.clone();
-      loginUrl.pathname = "/login";
-      loginUrl.searchParams.set("next", pathname);
-      return NextResponse.redirect(loginUrl);
-    }
-
-    const { data: prof } = await supabase
-      .from("profiles")
-      .select("verification_status")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    const status = prof?.verification_status ?? "pending";
-    if (status !== "approved") {
-      const pendingUrl = request.nextUrl.clone();
-      pendingUrl.pathname = "/pending-verification";
-      if (status === "rejected") pendingUrl.searchParams.set("status", "rejected");
-      return NextResponse.redirect(pendingUrl);
-    }
+  if (!url || !anonKey) {
+    throw new Error("Missing Supabase Environment Variables");
   }
 
-  if (pathname.startsWith("/admin")) {
-    if (!user) {
-      const loginUrl = request.nextUrl.clone();
-      loginUrl.pathname = "/login";
-      loginUrl.searchParams.set("next", pathname);
-      return NextResponse.redirect(loginUrl);
-    }
-
-    const { data: prof } = await supabase
-      .from("profiles")
-      .select("role, verification_status")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if (prof?.role !== "admin" || prof?.verification_status !== "approved") {
-      return NextResponse.redirect(new URL("/dashboard", request.url));
-    }
-  }
-
-  if (pathname === "/pending-verification") {
-    if (!user) {
-      const loginUrl = request.nextUrl.clone();
-      loginUrl.pathname = "/login";
-      loginUrl.searchParams.set("next", "/pending-verification");
-      return NextResponse.redirect(loginUrl);
-    }
-
-    const { data: prof } = await supabase
-      .from("profiles")
-      .select("verification_status")
-      .eq("id", user.id)
-      .maybeSingle();
-
-    if ((prof?.verification_status ?? "pending") === "approved") {
-      return NextResponse.redirect(new URL("/dashboard", request.url));
-    }
-  }
-
-  return response;
+  return createServerClient<Database>(url, anonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        // Sinkronisasi cookie ke request dan response
+        cookiesToSet.forEach(({ name, value, options }) => {
+          request.cookies.set(name, value);
+          response.cookies.set(name, value, options);
+        });
+      },
+    },
+  });
 }
-
-export const config = {
-  matcher: ["/dashboard/:path*", "/admin/:path*", "/pending-verification"],
-};
-
